@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net472</TargetFramework>
+		<LangVersion>7.3</LangVersion>
+	</PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="EntityFramework">
+      <HintPath>..\..\Rock\Rock\bin\Debug\EntityFramework.dll</HintPath>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>..\..\Rock\Rock\bin\Debug\Newtonsoft.Json.dll</HintPath>
+    </Reference>
+    <Reference Include="RestSharp">
+      <HintPath>..\..\Rock\Rock\bin\Debug\RestSharp.dll</HintPath>
+    </Reference>
+    <Reference Include="Rock">
+      <HintPath>..\..\Rock\Rock\bin\Debug\Rock.dll</HintPath>
+    </Reference>
+    <Reference Include="Rock.Common">
+      <HintPath>..\..\Rock\Rock\bin\Debug\Rock.Common.dll</HintPath>
+    </Reference>
+    <Reference Include="Rock.Enums">
+      <HintPath>..\..\Rock\Rock\bin\Debug\Rock.Enums.dll</HintPath>
+    </Reference>
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Web" />
+  </ItemGroup>
+
+</Project>
