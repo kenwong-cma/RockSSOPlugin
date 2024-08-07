@@ -36,12 +36,12 @@ using Rock.Web.Cache;
 namespace Rock.Security.ExternalAuthentication
 {
     /// <summary>
-    /// Authenticates a user using SLD (Azure AD)
+    /// Authenticates a user using SLD (Entra)
     /// </summary>
     /// <seealso cref="Rock.Security.AuthenticationComponent" />
     [Description("SLD Entra Authentication Provider")]
     [Export(typeof(AuthenticationComponent))]
-    [ExportMetadata("ComponentName", "SLD Azure AD")]
+    [ExportMetadata("ComponentName", "SLD Entra")]
 
     [TextField("Client ID", "The Entra Client ID")]
     [TextField("Tenant ID", "The Entra Tenant ID")]
