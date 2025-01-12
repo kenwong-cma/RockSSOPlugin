@@ -1,19 +1,11 @@
-﻿// <copyright>
-// Copyright by the Spark Development Network
-//
-// Licensed under the Rock Community License (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.rockrms.com/license
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// </copyright>
-//
+﻿using Newtonsoft.Json;
+using RestSharp;
+using Rock.Attribute;
+using Rock.Data;
+using Rock.Model;
+using Rock.Security.Authentication;
+using Rock.Security.Authentication.ExternalRedirectAuthentication;
+using Rock.Web.Cache;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -22,223 +14,356 @@ using System.Net;
 using System.Web;
 using System.Web.Security;
 
-using Newtonsoft.Json;
-
-using RestSharp;
-
-using Rock.Attribute;
-using Rock.Data;
-using Rock.Model;
-using Rock.Security.Authentication;
-using Rock.Security.Authentication.ExternalRedirectAuthentication;
-using Rock.Web.Cache;
-
 namespace Rock.Security.ExternalAuthentication
 {
     /// <summary>
-    /// Authenticates a user using ECD (Entra)
+    /// Authenticates a user using ECD (Entra or Azure AD B2C)
     /// </summary>
-    /// <seealso cref="Rock.Security.AuthenticationComponent" />
     [Description("NMC Entra Authentication Provider")]
     [Export(typeof(AuthenticationComponent))]
     [ExportMetadata("ComponentName", "NMC Entra")]
 
-    [TextField("Client ID", "The Entra Client ID")]
-    [TextField("Tenant ID", "The Entra Tenant ID")]
+    [UrlLinkField(
+        "Authorization URI",
+        "Base authorization endpoint (e.g. https://<tenant>.b2clogin.com/<tenantId>/<policy>/oauth2/v2.0/authorize).",
+        true, "", "", 0)]
+    [UrlLinkField(
+        "Token URI",
+        "Token endpoint (e.g. https://<tenant>.b2clogin.com/<tenantId>/<policy>/oauth2/v2.0/token).",
+        true, "", "", 1)]
+    [TextField("Client ID", "The Entra Client ID (Application (client) ID in Azure AD app registration)")]
     [TextField("Client Secret", "The Entra Client Secret")]
-
-    [Rock.SystemGuid.EntityTypeGuid("FD2B4733-83F1-4283-ADC4-444D744D6100")]
+    [BooleanField("Enable Debug Mode",
+        "Enabling this will generate exceptions at each point of the authentication process. Very useful for troubleshooting.",
+        false, "", 5)]
+    [Rock.SystemGuid.EntityTypeGuid("FD2B4733-83F1-4283-ADC4-444D744D6360")]
     public class NMCEntra : AuthenticationComponent, IExternalRedirectAuthentication
     {
-        /// <summary>
-        /// Gets the type of the service.
-        /// </summary>
-        /// <value>
-        /// The type of the service.
-        /// </value>
-        public override AuthenticationServiceType ServiceType
-        {
-            get { return AuthenticationServiceType.External; }
-        }
+        private const string EXCEPTION_DEBUG_TEXT = "Entra SSO Debug";
 
         /// <summary>
-        /// Determines if user is directed to another site (i.e. Facebook, Gmail, Twitter, etc) to confirm approval of using
-        /// that site's credentials for authentication.
+        /// Gets the type of the service (External).
         /// </summary>
-        /// <value>
-        /// The requires remote authentication.
-        /// </value>
-        public override bool RequiresRemoteAuthentication
-        {
-            get { return true; }
-        }
+        public override AuthenticationServiceType ServiceType => AuthenticationServiceType.External;
 
         /// <summary>
-        /// Tests the Http Request to determine if authentication should be tested by this
-        /// authentication provider.
+        /// This is a remote authentication provider, so it returns true.
         /// </summary>
-        /// <param name="request">The request.</param>
-        /// <returns></returns>
+        public override bool RequiresRemoteAuthentication => true;
+
+        /// <summary>
+        /// Checks if the HttpRequest indicates returning from the external OAuth flow.
+        /// </summary>
         public override bool IsReturningFromAuthentication(HttpRequest request)
         {
+            // This uses the dictionary approach from Rock, checking for "code" and "state".
             return IsReturningFromExternalAuthentication(request.QueryString.ToSimpleQueryStringDictionary());
         }
 
+        #region GenerateLoginUrl (Legacy)
+
         /// <summary>
-        /// Generates the log in URL.
+        /// Generates the login URL used by the Rock framework to initiate the OIDC flow (legacy approach).
         /// </summary>
-        /// <param name="request">Forming the URL to obtain user consent</param>
-        /// <returns></returns>
         public override Uri GenerateLoginUrl(HttpRequest request)
         {
+            // Gather config values
             string clientId = GetAttributeValue("ClientID");
-            string tenantId = GetAttributeValue("TenantID");
-            string redirectUri = GetRedirectUrl(request); // Ensure this matches your Azure registered redirect URI
+            string authorizationURI = GetAttributeValue("AuthorizationURI");
+            bool debugModeEnabled = GetAttributeValue("EnableDebugMode").AsBoolean();
+
+            // Ensure the authorization URI ends with "/authorize"
+            if (!authorizationURI.EndsWith("/authorize", StringComparison.OrdinalIgnoreCase))
+            {
+                authorizationURI = $"{authorizationURI.TrimEnd('/')}/authorize";
+            }
+
+            // Hardcode or generate a valid redirect URI in your scenario
+            // Typically you'd retrieve from a config or build from your Rock environment
+            string redirectUri = "https://localhost:6229/page/3";
             string returnUrl = request.QueryString["returnurl"];
 
-            string newUrl = string.Format(
-                "https://login.microsoftonline.com/{0}/oauth2/v2.0/authorize?response_type=code&client_id={1}&redirect_uri={2}&state={3}&scope=openid profile email User.Read",
-                tenantId,
-                clientId,
-                HttpUtility.UrlEncode(redirectUri),
-                HttpUtility.UrlEncode(returnUrl ?? FormsAuthentication.DefaultUrl)
-            );
+            // Build the full login URL
+            var newUrl = $"{authorizationURI}?"
+                + "response_type=code"
+                + $"&client_id={clientId}"
+                + $"&redirect_uri={HttpUtility.UrlEncode(redirectUri)}"
+                + $"&state={HttpUtility.UrlEncode(returnUrl ?? FormsAuthentication.DefaultUrl)}"
+                + "&scope=openid profile email";
+
+            if (debugModeEnabled)
+            {
+                var logMsg = $"GenerateLoginUrl -> {newUrl}";
+                ExceptionLogService.LogException(new Exception(logMsg, new Exception(EXCEPTION_DEBUG_TEXT)));
+            }
 
             return new Uri(newUrl);
         }
 
+        #endregion
+
+        #region IExternalRedirectAuthentication Implementation (Modern Approach)
 
         /// <summary>
-        /// JSON Class for Access Token Response
+        /// The modern approach in Rock for external redirect flows (exchanging the code, retrieving user info, and setting the auth cookie).
         /// </summary>
-        public class AccessTokenResponse
+        public ExternalRedirectAuthenticationResult Authenticate(ExternalRedirectAuthenticationOptions options)
         {
-            /// <summary>
-            /// Gets or sets the access_token.
-            /// </summary>
-            /// <value>
-            /// The access_token.
-            /// </value>
-            public string access_token { get; set; }
+            var result = new ExternalRedirectAuthenticationResult
+            {
+                UserName = string.Empty,
+                ReturnUrl = options.Parameters.GetValueOrNull("state") // The Rock returnUrl or page
+            };
 
-            /// <summary>
-            /// Gets or sets the expires_in.
-            /// </summary>
-            /// <value>
-            /// The expires_in.
-            /// </value>
-            public int expires_in { get; set; }
+            // 1. Read config
+            bool debugModeEnabled = GetAttributeValue("EnableDebugMode").AsBoolean();
+            string clientId = GetAttributeValue("ClientID");
+            string clientSecret = GetAttributeValue("ClientSecret");
+            string tokenURI = GetAttributeValue("TokenURI");
 
-            /// <summary>
-            /// Gets or sets the token_type.
-            /// </summary>
-            /// <value>
-            /// The token_type.
-            /// </value>
-            public string token_type { get; set; }
+            // 2. The redirectUri is how we got here
+            string redirectUri = options.RedirectUrl;
+
+            try
+            {
+                // 3. Exchange Authorization Code for Access Token
+                var restClient = new RestClient(tokenURI);
+                var restRequest = new RestRequest(Method.POST);
+
+                restRequest.AddParameter("grant_type", "authorization_code");
+                restRequest.AddParameter("code", options.Parameters.GetValueOrNull("code"));
+                restRequest.AddParameter("redirect_uri", redirectUri);
+                restRequest.AddParameter("client_id", clientId);
+                restRequest.AddParameter("client_secret", clientSecret);
+
+                var restResponse = restClient.Execute(restRequest);
+
+                if (debugModeEnabled)
+                {
+                    var logMsg = $"ExternalRedirectAuthentication -> Token Response: {restResponse.Content}";
+                    ExceptionLogService.LogException(new Exception(logMsg, new Exception(EXCEPTION_DEBUG_TEXT)));
+                }
+
+                if (restResponse.StatusCode == HttpStatusCode.OK)
+                {
+                    var tokenResp = JsonConvert.DeserializeObject<AccessTokenResponse>(restResponse.Content);
+                    string accessToken = tokenResp.access_token;
+
+                    // 4. Retrieve user info from Microsoft Graph
+                    restClient = new RestClient("https://graph.microsoft.com/v1.0/me");
+                    restRequest = new RestRequest(Method.GET);
+                    restRequest.AddHeader("Authorization", $"Bearer {accessToken}");
+
+                    var userInfoResponse = restClient.Execute(restRequest);
+                    if (debugModeEnabled)
+                    {
+                        var userInfoMsg = $"ExternalRedirectAuthentication -> User Info: {userInfoResponse.Content}";
+                        ExceptionLogService.LogException(new Exception(userInfoMsg, new Exception(EXCEPTION_DEBUG_TEXT)));
+                    }
+
+                    if (userInfoResponse.StatusCode == HttpStatusCode.OK)
+                    {
+                        // 5. Map user claims to Rock user
+                        var office365User = JsonConvert.DeserializeObject<Office365_User>(userInfoResponse.Content);
+                        string userName = GetOffice365User(office365User, accessToken);
+
+                        if (!string.IsNullOrWhiteSpace(userName))
+                        {
+                            // 6. Set Rock auth cookie
+                            Rock.Security.Authorization.SetAuthCookie(userName, false, false);
+
+                            result.IsAuthenticated = true;
+                            result.UserName = userName;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ExceptionLogService.LogException(ex, HttpContext.Current);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Generates the external login URL for the new approach in Rock (UI calls this to get the redirect).
+        /// Similar to GenerateLoginUrl, but for IExternalRedirectAuthentication usage.
+        /// </summary>
+        public Uri GenerateExternalLoginUrl(string externalProviderReturnUrl, string successfulAuthenticationRedirectUrl)
+        {
+            bool debugModeEnabled = GetAttributeValue("EnableDebugMode").AsBoolean();
+            string clientId = GetAttributeValue("ClientID");
+            string authorizationURI = GetAttributeValue("AuthorizationURI");
+
+            // Ensure ends with "/authorize"
+            if (!authorizationURI.EndsWith("/authorize", StringComparison.OrdinalIgnoreCase))
+            {
+                authorizationURI = $"{authorizationURI.TrimEnd('/')}/authorize";
+            }
+
+            // The "successfulAuthenticationRedirectUrl" is typically where the user returns after external auth
+            // e.g. https://<your_rock_server>/page/<callback_page>
+            string newUrl = $"{authorizationURI}?"
+                + "response_type=code"
+                + $"&client_id={clientId}"
+                + $"&redirect_uri={HttpUtility.UrlEncode(successfulAuthenticationRedirectUrl)}"
+                + $"&state={HttpUtility.UrlEncode(externalProviderReturnUrl ?? FormsAuthentication.DefaultUrl)}"
+                + "&scope=openid profile email";
+
+            if (debugModeEnabled)
+            {
+                var logMsg = $"GenerateExternalLoginUrl -> {newUrl}";
+                ExceptionLogService.LogException(new Exception(logMsg, new Exception(EXCEPTION_DEBUG_TEXT)));
+            }
+
+            return new Uri(newUrl);
+        }
+
+        public bool IsReturningFromExternalAuthentication(IDictionary<string, string> parameters)
+        {
+            // Typically ensure 'code' and 'state' exist
+            return !string.IsNullOrWhiteSpace(parameters.GetValueOrNull("code"))
+                && !string.IsNullOrWhiteSpace(parameters.GetValueOrNull("state"));
+        }
+
+        #endregion
+
+        #region Legacy Rock Overrides (If Rock calls them)
+
+        /// <inheritdoc/>
+        public override bool Authenticate(HttpRequest request, out string username, out string returnUrl)
+        {
+            bool debugModeEnabled = GetAttributeValue("EnableDebugMode").AsBoolean();
+            username = string.Empty;
+            returnUrl = request.QueryString["state"];
+
+            // 1. Gather config
+            string tokenURI = GetAttributeValue("TokenURI");
+            string code = request.QueryString["code"];
+            string redirectUri = GetRedirectUrl(request);
+            string clientId = GetAttributeValue("ClientID");
+            string clientSecret = GetAttributeValue("ClientSecret");
+
+            try
+            {
+                // 2. Exchange Code for Token
+                var restClient = new RestClient(tokenURI);
+                var restRequest = new RestRequest(Method.POST);
+                restRequest.AddParameter("grant_type", "authorization_code");
+                restRequest.AddParameter("code", code);
+                restRequest.AddParameter("redirect_uri", redirectUri);
+                restRequest.AddParameter("client_id", clientId);
+                restRequest.AddParameter("client_secret", clientSecret);
+
+                var restResponse = restClient.Execute(restRequest);
+                if (debugModeEnabled)
+                {
+                    var debugMsg = $"Authenticate() -> Token Exchange: {restResponse.Content}";
+                    ExceptionLogService.LogException(new Exception(debugMsg, new Exception(EXCEPTION_DEBUG_TEXT)));
+                }
+
+                if (restResponse.StatusCode == HttpStatusCode.OK)
+                {
+                    var tokenResp = JsonConvert.DeserializeObject<Office365_AccessTokenResponse>(restResponse.Content);
+                    string accessToken = tokenResp.access_token;
+
+                    // 3. Get user from Graph
+                    restClient = new RestClient("https://graph.microsoft.com/v1.0/me");
+                    restRequest = new RestRequest(Method.GET);
+                    restRequest.AddHeader("Authorization", $"Bearer {accessToken}");
+
+                    restResponse = restClient.Execute(restRequest);
+                    if (debugModeEnabled)
+                    {
+                        var userInfoMsg = $"Authenticate() -> User Info: {restResponse.Content}";
+                        ExceptionLogService.LogException(new Exception(userInfoMsg, new Exception(EXCEPTION_DEBUG_TEXT)));
+                    }
+
+                    if (restResponse.StatusCode == HttpStatusCode.OK)
+                    {
+                        var office365User = JsonConvert.DeserializeObject<Office365_User>(restResponse.Content);
+                        username = GetOffice365User(office365User, accessToken);
+
+                        // 4. Set the Rock auth cookie
+                        if (!string.IsNullOrWhiteSpace(username))
+                        {
+                            Rock.Security.Authorization.SetAuthCookie(username, false, false);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ExceptionLogService.LogException(ex, HttpContext.Current);
+            }
+
+            return !string.IsNullOrWhiteSpace(username);
         }
 
         /// <inheritdoc/>
-        public override bool Authenticate(HttpRequest request, out string userName, out string returnUrl)
-        {
-            var options = new ExternalRedirectAuthenticationOptions
-            {
-                RedirectUrl = GetRedirectUrl(request),
-                Parameters = request.QueryString.ToSimpleQueryStringDictionary()
-            };
+        public override string ImageUrl() => string.Empty;
 
-            var result = Authenticate(options);
-
-            userName = result.UserName;
-            returnUrl = result.ReturnUrl;
-
-            return result.IsAuthenticated;
-        }
-
-        /// <summary>
-        /// Gets the URL of an image that should be displayed.
-        /// </summary>
-        /// <returns></returns>
-        /// <exception cref="System.NotImplementedException"></exception>
-        public override string ImageUrl()
-        {
-            return string.Empty;
-        }
-
-        private string GetRedirectUrl(HttpRequest request)
-        {
-            Uri uri = new Uri(request.UrlProxySafe().ToString());
-            return uri.Scheme + "://" + uri.GetComponents(UriComponents.HostAndPort, UriFormat.UriEscaped) + uri.LocalPath;
-        }
-
-        /// <summary>
-        /// Authenticates the user based on user name and password
-        /// </summary>
-        /// <param name="user">The user.</param>
-        /// <param name="password">The password.</param>
-        /// <returns></returns>
-        /// <exception cref="System.NotImplementedException"></exception>
+        /// <inheritdoc/>
         public override bool Authenticate(UserLogin user, string password)
         {
             throw new NotImplementedException();
         }
 
-        /// <summary>
-        /// Encodes the password.
-        /// </summary>
-        /// <param name="user">The user.</param>
-        /// <param name="password">The password.</param>
-        /// <returns></returns>
-        /// <exception cref="System.NotImplementedException"></exception>
         public override string EncodePassword(UserLogin user, string password)
         {
             throw new NotImplementedException();
         }
 
-        /// <summary>
-        /// Gets a value indicating whether [supports change password].
-        /// </summary>
-        /// <value>
-        /// <c>true</c> if [supports change password]; otherwise, <c>false</c>.
-        /// </value>
-        public override bool SupportsChangePassword
-        {
-            get
-            {
-                return false;
-            }
-        }
+        public override bool SupportsChangePassword => false;
 
-        /// <summary>
-        /// Changes the password.
-        /// </summary>
-        /// <param name="user">The user.</param>
-        /// <param name="oldPassword">The old password.</param>
-        /// <param name="newPassword">The new password.</param>
-        /// <param name="warningMessage">The warning message.</param>
-        /// <returns></returns>
-        /// <exception cref="System.NotImplementedException"></exception>
         public override bool ChangePassword(UserLogin user, string oldPassword, string newPassword, out string warningMessage)
         {
             warningMessage = "not supported";
             return false;
         }
 
-        /// <summary>
-        /// Sets the password.
-        /// </summary>
-        /// <param name="user">The user.</param>
-        /// <param name="password">The password.</param>
-        /// <exception cref="System.NotImplementedException"></exception>
         public override void SetPassword(UserLogin user, string password)
         {
             throw new NotImplementedException();
         }
 
+        #endregion
+
+        #region Helper: GetRedirectUrl
+
+        private string GetRedirectUrl(HttpRequest request)
+        {
+            // Example: build from the current Rock page path
+            // e.g. https://<your_rock_domain>/page/3
+            Uri uri = new Uri(request.UrlProxySafe().ToString());
+            return uri.Scheme + "://" + uri.GetComponents(UriComponents.HostAndPort, UriFormat.UriEscaped) + uri.LocalPath;
+        }
+
+        #endregion
+
+        #region Models
+
         /// <summary>
-        /// Entra User Object
+        /// Minimal Access Token Response
         /// </summary>
-        public class EntraUser
+        public class AccessTokenResponse
+        {
+            public string access_token { get; set; }
+            public int expires_in { get; set; }
+            public string token_type { get; set; }
+        }
+
+        public class Office365_AccessTokenResponse
+        {
+            public string access_token { get; set; }
+            public int expires_in { get; set; }
+            public string token_type { get; set; }
+            public string scope { get; set; }
+            public int ext_expires_int { get; set; }
+        }
+
+        public class Office365_User
         {
             public string id { get; set; }
             public string displayName { get; set; }
@@ -253,23 +378,19 @@ namespace Rock.Security.ExternalAuthentication
         }
 
         /// <summary>
-        /// Gets the name of the Entra user.
+        /// Maps the user from the retrieved JSON to a Rock Person/UserLogin
         /// </summary>
-        /// <param name="entraUser">The Entra user.</param>
-        /// <param name="accessToken">The access token.</param>
-        /// <returns></returns>
-        public static string GetEntraUser(EntraUser entraUser, string accessToken = "")
+        public static string GetOffice365User(Office365_User office365User, string accessToken = "")
         {
-            if (accessToken.IsNullOrWhiteSpace())
-            {
-                return null;
-            }
+            return CreateOrRetrieveUser(office365User?.userPrincipalName, office365User?.givenName, office365User?.surName, "office365", accessToken);
+        }
 
-            string username = string.Empty;
-            string email = entraUser.userPrincipalName;
-            string entraId = entraUser.id;
+        private static string CreateOrRetrieveUser(string email, string firstName, string lastName, string loginSource, string accessToken)
+        {
+            if (accessToken.IsNullOrWhiteSpace()) return null;
+            if (email.IsNullOrWhiteSpace()) return null;
 
-            string userName = "Entra_" + email;
+            string userName = $"{loginSource}_{email}";
             UserLogin user = null;
 
             using (var rockContext = new RockContext())
@@ -279,11 +400,8 @@ namespace Rock.Security.ExternalAuthentication
 
                 if (user == null)
                 {
-                    string lastName = entraUser.surName.ToString();
-                    string firstName = entraUser.givenName.ToString();
-
+                    // Attempt to find an existing Person
                     Person person = null;
-
                     if (email.IsNotNullOrWhiteSpace())
                     {
                         var personService = new PersonService(rockContext);
@@ -310,95 +428,19 @@ namespace Rock.Security.ExternalAuthentication
                                 Gender = Gender.Unknown
                             };
 
-                            if (person != null)
-                            {
-                                PersonService.SaveNewPerson(person, rockContext, null, false);
-                            }
+                            PersonService.SaveNewPerson(person, rockContext, null, false);
                         }
 
                         if (person != null)
                         {
-                            int typeId = EntityTypeCache.Get(typeof(Entra)).Id;
-                            user = UserLoginService.Create(rockContext, person, AuthenticationServiceType.External, typeId, userName, "entra", true);
+                            int typeId = EntityTypeCache.Get(typeof(NMCEntra)).Id;
+                            user = UserLoginService.Create(rockContext, person, AuthenticationServiceType.External, typeId, userName, loginSource, true);
                         }
                     });
                 }
-
-                if (user != null)
-                {
-                    return user.UserName;
-                }
-
-                return username;
-            }
-        }
-
-        #region IExternalRedirectAuthentication Implementation
-
-        /// <inheritdoc/>
-        public ExternalRedirectAuthenticationResult Authenticate(ExternalRedirectAuthenticationOptions options)
-        {
-            var result = new ExternalRedirectAuthenticationResult
-            {
-                UserName = string.Empty,
-                ReturnUrl = options.Parameters.GetValueOrNull("state")
-            };
-
-            try
-            {
-                string tenantId = GetAttributeValue("TenantID");
-                var restClient = new RestClient($"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token");
-                var restRequest = new RestRequest(Method.POST);
-                restRequest.AddParameter("code", options.Parameters.GetValueOrNull("code"));
-                restRequest.AddParameter("client_id", GetAttributeValue("ClientID"));
-                restRequest.AddParameter("client_secret", GetAttributeValue("ClientSecret"));
-                restRequest.AddParameter("redirect_uri", options.RedirectUrl);
-                restRequest.AddParameter("grant_type", "authorization_code");
-                var restResponse = restClient.Execute(restRequest);
-
-                if (restResponse.StatusCode == HttpStatusCode.OK)
-                {
-                    var accesstokenresponse = JsonConvert.DeserializeObject<AccessTokenResponse>(restResponse.Content);
-                    string accessToken = accesstokenresponse.access_token;
-
-                    restRequest = new RestRequest(Method.GET);
-                    restRequest.AddHeader("Authorization", $"Bearer {accessToken}");
-                    restClient = new RestClient("https://graph.microsoft.com/v1.0/me");
-                    restResponse = restClient.Execute(restRequest);
-
-                    if (restResponse.StatusCode == HttpStatusCode.OK)
-                    {
-                        EntraUser entraUser = JsonConvert.DeserializeObject<EntraUser>(restResponse.Content);
-                        result.UserName = GetEntraUser(entraUser, accessToken);
-                        result.IsAuthenticated = !string.IsNullOrWhiteSpace(result.UserName);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                ExceptionLogService.LogException(ex, HttpContext.Current);
             }
 
-            return result;
-        }
-
-        /// <inheritdoc/>
-        public Uri GenerateExternalLoginUrl(string externalProviderReturnUrl, string successfulAuthenticationRedirectUrl)
-        {
-            string tenantId = GetAttributeValue("TenantID");
-            return new Uri(string.Format(
-                "https://login.microsoftonline.com/{0}/oauth2/v2.0/authorize?response_type=code&client_id={1}&redirect_uri={2}&state={3}&scope=openid profile email User.Read",
-                tenantId,
-                GetAttributeValue("ClientID"),
-                HttpUtility.UrlEncode(externalProviderReturnUrl),
-                HttpUtility.UrlEncode(successfulAuthenticationRedirectUrl ?? FormsAuthentication.DefaultUrl)));
-        }
-
-        /// <inheritdoc/>
-        public bool IsReturningFromExternalAuthentication(IDictionary<string, string> parameters)
-        {
-            return !string.IsNullOrWhiteSpace(parameters.GetValueOrNull("code")) &&
-                !string.IsNullOrWhiteSpace(parameters.GetValueOrNull("state"));
+            return user?.UserName;
         }
 
         #endregion

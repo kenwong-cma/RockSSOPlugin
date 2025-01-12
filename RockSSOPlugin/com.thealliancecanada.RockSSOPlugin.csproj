@@ -5,6 +5,10 @@
 		<LangVersion>7.3</LangVersion>
 	</PropertyGroup>
 
+	<ItemGroup>
+	  <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.3.0" />
+	</ItemGroup>
+
   <ItemGroup>
     <Reference Include="EntityFramework">
       <HintPath>..\..\Rock\Rock\bin\Debug\EntityFramework.dll</HintPath>
