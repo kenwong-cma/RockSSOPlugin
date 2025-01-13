@@ -1,4 +1,7 @@
-﻿using Newtonsoft.Json;
+﻿using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.IdentityModel.Tokens;
+using Newtonsoft.Json;
 using RestSharp;
 using Rock;
 using Rock.Attribute;
@@ -15,6 +18,7 @@ using System.ComponentModel.Composition;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Net;
+using System.Security.Claims;
 using System.Web;
 using System.Web.Security;
 
@@ -32,6 +36,12 @@ namespace com.thealliancecanada.RockSSOPlugin
     [TextField("Client Id", "Client Id from your Entra B2C App Registration.", true, "", "", 3)]
     [TextField("Client Secret", "Client Secret from your Entra B2C App Registration.", true, "", "", 4)]
     [BooleanField("Enable Debug Mode", "Enable to log detailed debug information.", false, "", 5)]
+    [UrlLinkField("WellKnown",
+    "URI for fetching the OpenID Connect configuration from Entra B2C.",
+    true,
+    "https://theallianceca.b2clogin.com/theallianceca.onmicrosoft.com/B2C_1A_SIGNUP_SIGNIN/v2.0/.well-known/openid-configuration",
+    "",
+    6)]
     public class EntraB2C : AuthenticationComponent, IExternalRedirectAuthentication
     {
         private const string EXCEPTION_DEBUG_TEXT = "Entra B2C Debug";
@@ -71,6 +81,7 @@ namespace com.thealliancecanada.RockSSOPlugin
             returnUrl = request.QueryString["state"];
             string redirectUri = GetRedirectUrl(request);
             string tokenURI = GetAttributeValue("TokenURI");
+            string wellKnownUri = GetAttributeValue("WellKnown");
             bool debugModeEnabled = GetAttributeValue("EnableDebugMode").AsBoolean();
 
             try
@@ -82,7 +93,7 @@ namespace com.thealliancecanada.RockSSOPlugin
                 restRequest.AddParameter("client_secret", GetAttributeValue("ClientSecret"));
                 restRequest.AddParameter("redirect_uri", redirectUri);
                 restRequest.AddParameter("grant_type", "authorization_code");
-                restRequest.AddParameter("scope", "openid");
+                restRequest.AddParameter("scope", "openid profile email");
 
                 var restResponse = restClient.Execute(restRequest);
 
@@ -99,22 +110,63 @@ namespace com.thealliancecanada.RockSSOPlugin
 
                     if (!string.IsNullOrWhiteSpace(idToken))
                     {
-                        // Decode the JWT
                         var handler = new JwtSecurityTokenHandler();
-                        var jwtToken = handler.ReadJwtToken(idToken);
 
-                        foreach (var claim in jwtToken.Claims)
+                        // Retrieve the OpenID Connect metadata document
+                        var configurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
+                            wellKnownUri,
+                            new OpenIdConnectConfigurationRetriever());
+
+                        OpenIdConnectConfiguration openIdConfig = null;
+                        try
                         {
-                            ExceptionLogService.LogException(new Exception($"Claim: {claim.Type} = {claim.Value}", new Exception(EXCEPTION_DEBUG_TEXT)));
+                            openIdConfig = configurationManager.GetConfigurationAsync().Result;
+                        }
+                        catch (Exception ex)
+                        {
+                            ExceptionLogService.LogException(new Exception("Failed to retrieve OpenID configuration", ex));
+                            throw;
                         }
 
-                        // Extract claims (adjust claim types based on your B2C configuration)
-                        string email = jwtToken?.Claims.FirstOrDefault(c => c.Type == "email")?.Value
-             ?? jwtToken?.Claims.FirstOrDefault(c => c.Type == "emails")?.Value
-             ?? jwtToken?.Claims.FirstOrDefault(c => c.Type == "signInNames.emailAddress")?.Value;
+                        var validationParameters = new TokenValidationParameters
+                        {
+                            ValidateIssuer = true,
+                            ValidIssuer = openIdConfig.Issuer,
+                            ValidateAudience = true,
+                            ValidAudience = GetAttributeValue("ClientId"),
+                            ValidateLifetime = true,
+                            IssuerSigningKeys = openIdConfig.SigningKeys,
+                            // Optional: Validate the token's nonce, if used
+                        };
 
-                        string givenName = jwtToken?.Claims.FirstOrDefault(c => c.Type == "given_name")?.Value;
-                        string surname = jwtToken?.Claims.FirstOrDefault(c => c.Type == "family_name")?.Value;
+                        if (debugModeEnabled)
+                        {
+                            ExceptionLogService.LogException(new Exception($"Validation Parameters: Issuer={validationParameters.ValidIssuer}, Audience={validationParameters.ValidAudience}", new Exception(EXCEPTION_DEBUG_TEXT)));
+                        }
+
+                        SecurityToken validatedToken = null;
+                        ClaimsPrincipal principal = null;
+
+                        try
+                        {
+                            principal = handler.ValidateToken(idToken, validationParameters, out validatedToken);
+                        }
+                        catch (SecurityTokenValidationException stvEx)
+                        {
+                            ExceptionLogService.LogException(new Exception($"Token validation failed: {stvEx.Message}", stvEx));
+                        }
+                        catch (Exception ex)
+                        {
+                            ExceptionLogService.LogException(ex, HttpContext.Current);
+                        }
+
+                        // Extract claims from the validated token
+                        string email = principal.Claims.FirstOrDefault(c => c.Type == "email")?.Value
+                                       ?? principal.Claims.FirstOrDefault(c => c.Type == "emails")?.Value
+                                       ?? principal.Claims.FirstOrDefault(c => c.Type == "signInNames.emailAddress")?.Value;
+
+                        string givenName = principal.Claims.FirstOrDefault(c => c.Type == "given_name")?.Value;
+                        string surname = principal.Claims.FirstOrDefault(c => c.Type == "family_name")?.Value;
 
                         // Construct a unique username identifier for the local system
                         string userKey = email != null ? email.ToLowerInvariant() : Guid.NewGuid().ToString();
@@ -123,7 +175,7 @@ namespace com.thealliancecanada.RockSSOPlugin
                         // Optionally use GetB2CUser to create or retrieve the user in Rock
                         username = GetB2CUser(new B2C_User
                         {
-                            id = jwtToken?.Claims.FirstOrDefault(c => c.Type == "oid")?.Value,
+                            id = principal.Claims.FirstOrDefault(c => c.Type == "oid")?.Value,
                             givenName = givenName,
                             surname = surname,
                             userPrincipalName = email,
@@ -131,6 +183,10 @@ namespace com.thealliancecanada.RockSSOPlugin
                         }, idToken);
                     }
                 }
+            }
+            catch (SecurityTokenValidationException stvEx)
+            {
+                ExceptionLogService.LogException(new Exception($"Token validation failed: {stvEx.Message}", stvEx));
             }
             catch (Exception ex)
             {
@@ -159,8 +215,7 @@ namespace com.thealliancecanada.RockSSOPlugin
                 restRequest.AddParameter("client_secret", GetAttributeValue("ClientSecret"));
                 restRequest.AddParameter("redirect_uri", options.RedirectUrl);
                 restRequest.AddParameter("grant_type", "authorization_code");
-                // Request the id_token explicitly if not included by default
-                restRequest.AddParameter("scope", "openid");
+                restRequest.AddParameter("scope", "openid profile email");
 
                 var restResponse = restClient.Execute(restRequest);
 
@@ -171,33 +226,77 @@ namespace com.thealliancecanada.RockSSOPlugin
 
                 if (restResponse.StatusCode == HttpStatusCode.OK)
                 {
+                    // Parse the token response
                     var tokenResponse = JsonConvert.DeserializeObject<B2C_AccessTokenResponse>(restResponse.Content);
                     string idToken = tokenResponse.id_token;
 
                     if (!string.IsNullOrWhiteSpace(idToken))
                     {
                         var handler = new JwtSecurityTokenHandler();
-                        var jwtToken = handler.ReadJwtToken(idToken);
 
-                        foreach (var claim in jwtToken.Claims)
+                        // Retrieve the OpenID Connect metadata document
+                        string wellKnownUri = GetAttributeValue("WellKnown");
+                        var configurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
+                            wellKnownUri,
+                            new OpenIdConnectConfigurationRetriever());
+
+                        OpenIdConnectConfiguration openIdConfig = null;
+                        try
                         {
-                            ExceptionLogService.LogException(new Exception($"Claim: {claim.Type} = {claim.Value}", new Exception(EXCEPTION_DEBUG_TEXT)));
+                            openIdConfig = configurationManager.GetConfigurationAsync().Result;
+                        }
+                        catch (Exception ex)
+                        {
+                            ExceptionLogService.LogException(new Exception("Failed to retrieve OpenID configuration", ex));
+                            throw;
                         }
 
-                        // Extract claims (adjust claim types based on your B2C configuration)
-                        string email = jwtToken?.Claims.FirstOrDefault(c => c.Type == "email")?.Value
-             ?? jwtToken?.Claims.FirstOrDefault(c => c.Type == "emails")?.Value
-             ?? jwtToken?.Claims.FirstOrDefault(c => c.Type == "signInNames.emailAddress")?.Value;
 
+                        var validationParameters = new TokenValidationParameters
+                        {
+                            ValidateIssuer = true,
+                            ValidIssuer = openIdConfig.Issuer,
+                            ValidateAudience = true,
+                            ValidAudience = GetAttributeValue("ClientId"),
+                            ValidateLifetime = true,
+                            IssuerSigningKeys = openIdConfig.SigningKeys,
+                            // Optional: Validate the token's nonce, if used
+                        };
 
-                        string givenName = jwtToken?.Claims.FirstOrDefault(c => c.Type == "given_name")?.Value;
-                        string surname = jwtToken?.Claims.FirstOrDefault(c => c.Type == "family_name")?.Value;
+                        if (debugModeEnabled)
+                        {
+                            ExceptionLogService.LogException(new Exception($"Validation Parameters: Issuer={validationParameters.ValidIssuer}, Audience={validationParameters.ValidAudience}", new Exception(EXCEPTION_DEBUG_TEXT)));
+                        }
+
+                        SecurityToken validatedToken = null;
+                        ClaimsPrincipal principal = null;
+
+                        try
+                        {
+                            principal = handler.ValidateToken(idToken, validationParameters, out validatedToken);
+                        }
+                        catch (SecurityTokenValidationException stvEx)
+                        {
+                            ExceptionLogService.LogException(new Exception($"Token validation failed: {stvEx.Message}", stvEx));
+                        }
+                        catch (Exception ex)
+                        {
+                            ExceptionLogService.LogException(ex, HttpContext.Current);
+                        }
+
+                        // Extract claims from the validated token
+                        string email = principal.Claims.FirstOrDefault(c => c.Type == "email")?.Value
+                                       ?? principal.Claims.FirstOrDefault(c => c.Type == "emails")?.Value
+                                       ?? principal.Claims.FirstOrDefault(c => c.Type == "signInNames.emailAddress")?.Value;
+
+                        string givenName = principal.Claims.FirstOrDefault(c => c.Type == "given_name")?.Value;
+                        string surname = principal.Claims.FirstOrDefault(c => c.Type == "family_name")?.Value;
 
                         // Construct a unique username identifier for the local system
                         string userKey = email != null ? email.ToLowerInvariant() : Guid.NewGuid().ToString();
                         var b2cUser = new B2C_User
                         {
-                            id = jwtToken.Claims.FirstOrDefault(c => c.Type == "oid")?.Value,
+                            id = principal.Claims.FirstOrDefault(c => c.Type == "oid")?.Value,
                             givenName = givenName,
                             surname = surname,
                             userPrincipalName = email,
@@ -214,6 +313,10 @@ namespace com.thealliancecanada.RockSSOPlugin
                     }
                 }
             }
+            catch (SecurityTokenValidationException stvEx)
+            {
+                ExceptionLogService.LogException(new Exception($"Token validation failed: {stvEx.Message}", stvEx));
+            }
             catch (Exception ex)
             {
                 ExceptionLogService.LogException(ex, HttpContext.Current);
@@ -224,7 +327,7 @@ namespace com.thealliancecanada.RockSSOPlugin
 
         public override string ImageUrl()
         {
-            return string.Empty; // Optional: return an image URL/icon for the button
+            return string.Empty;
         }
 
         private string GetRedirectUrl(HttpRequest request)
@@ -250,8 +353,6 @@ namespace com.thealliancecanada.RockSSOPlugin
             return new Uri(newUrl);
         }
 
-
-        // Implement password/auth-related methods if necessary for your scenario:
         public override bool Authenticate(UserLogin user, string password)
             => throw new NotImplementedException();
         public override string EncodePassword(UserLogin user, string password)
@@ -341,7 +442,7 @@ namespace com.thealliancecanada.RockSSOPlugin
         public class B2C_AccessTokenResponse
         {
             public string access_token { get; set; }
-            public string id_token { get; set; }  // Add this property
+            public string id_token { get; set; }
             public int expires_in { get; set; }
             public string token_type { get; set; }
             public string scope { get; set; }
@@ -355,7 +456,6 @@ namespace com.thealliancecanada.RockSSOPlugin
             public string givenName { get; set; }
             public string surname { get; set; }
             public string userPrincipalName { get; set; }
-            // Add any additional properties as needed based on the Entra B2C user response
         }
 
         #endregion

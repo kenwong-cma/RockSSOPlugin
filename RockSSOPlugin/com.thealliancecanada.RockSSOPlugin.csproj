@@ -13,6 +13,15 @@
     <Reference Include="EntityFramework">
       <HintPath>..\..\Rock\Rock\bin\Debug\EntityFramework.dll</HintPath>
     </Reference>
+    <Reference Include="Microsoft.IdentityModel.Protocols">
+      <HintPath>..\..\Rock\Rock\bin\Debug\Microsoft.IdentityModel.Protocols.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect">
+      <HintPath>..\..\Rock\Rock\bin\Debug\Microsoft.IdentityModel.Protocols.OpenIdConnect.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.IdentityModel.Tokens">
+      <HintPath>..\..\Rock\Rock\bin\Debug\Microsoft.IdentityModel.Tokens.dll</HintPath>
+    </Reference>
     <Reference Include="Newtonsoft.Json">
       <HintPath>..\..\Rock\Rock\bin\Debug\Newtonsoft.Json.dll</HintPath>
     </Reference>
