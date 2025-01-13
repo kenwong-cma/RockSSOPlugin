@@ -160,27 +160,50 @@ namespace com.thealliancecanada.RockSSOPlugin
                             ExceptionLogService.LogException(ex, HttpContext.Current);
                         }
 
-                        // Extract claims from the validated token
+                        if (debugModeEnabled)
+                        {
+                            if (principal != null)
+                            {
+                                foreach (var claim in principal.Claims)
+                                {
+                                    ExceptionLogService.LogException(
+                                        new Exception($"Claim: {claim.Type} = {claim.Value}")
+                                    );
+                                }
+                            }
+                            else
+                            {
+                                ExceptionLogService.LogException(
+                                    new Exception("Principal is null after token validation.")
+                                );
+                            }
+                        }
+
                         string email = principal.Claims.FirstOrDefault(c => c.Type == "email")?.Value
-                                       ?? principal.Claims.FirstOrDefault(c => c.Type == "emails")?.Value
-                                       ?? principal.Claims.FirstOrDefault(c => c.Type == "signInNames.emailAddress")?.Value;
+                               ?? principal.Claims.FirstOrDefault(c => c.Type == "emails")?.Value
+                               ?? principal.Claims.FirstOrDefault(c => c.Type == "signInNames.emailAddress")?.Value
+                               ?? principal.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Email)?.Value;
 
-                        string givenName = principal.Claims.FirstOrDefault(c => c.Type == "given_name")?.Value;
-                        string surname = principal.Claims.FirstOrDefault(c => c.Type == "family_name")?.Value;
+                        string givenName = principal.Claims.FirstOrDefault(c => c.Type == ClaimTypes.GivenName)?.Value;
+                        string surname = principal.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Surname)?.Value;
 
-                        // Construct a unique username identifier for the local system
-                        string userKey = email != null ? email.ToLowerInvariant() : Guid.NewGuid().ToString();
-                        username = $"EntraB2C_{userKey}";
-
-                        // Optionally use GetB2CUser to create or retrieve the user in Rock
-                        username = GetB2CUser(new B2C_User
+                        var b2cUser = new B2C_User
                         {
                             id = principal.Claims.FirstOrDefault(c => c.Type == "oid")?.Value,
                             givenName = givenName,
                             surname = surname,
                             userPrincipalName = email,
                             displayName = $"{givenName} {surname}"
-                        }, idToken);
+                        };
+
+                        string userKey = email != null ? email.ToLowerInvariant() : Guid.NewGuid().ToString();
+                        username = $"EntraB2C_{userKey}";
+
+                        if (debugModeEnabled)
+                        {
+                            var exceptionText = string.Format("UserName: {0}", username);
+                            ExceptionLogService.LogException(new Exception(exceptionText, new Exception(EXCEPTION_DEBUG_TEXT)));
+                        }
                     }
                 }
             }
@@ -284,13 +307,32 @@ namespace com.thealliancecanada.RockSSOPlugin
                             ExceptionLogService.LogException(ex, HttpContext.Current);
                         }
 
+                        if (debugModeEnabled)
+                        {
+                            if (principal != null)
+                            {
+                                foreach (var claim in principal.Claims)
+                                {
+                                    ExceptionLogService.LogException(
+                                        new Exception($"Claim: {claim.Type} = {claim.Value}")
+                                    );
+                                }
+                            }
+                            else
+                            {
+                                ExceptionLogService.LogException(
+                                    new Exception("Principal is null after token validation.")
+                                );
+                            }
+                        }
+
                         // Extract claims from the validated token
                         string email = principal.Claims.FirstOrDefault(c => c.Type == "email")?.Value
-                                       ?? principal.Claims.FirstOrDefault(c => c.Type == "emails")?.Value
-                                       ?? principal.Claims.FirstOrDefault(c => c.Type == "signInNames.emailAddress")?.Value;
-
-                        string givenName = principal.Claims.FirstOrDefault(c => c.Type == "given_name")?.Value;
-                        string surname = principal.Claims.FirstOrDefault(c => c.Type == "family_name")?.Value;
+                             ?? principal.Claims.FirstOrDefault(c => c.Type == "emails")?.Value
+                             ?? principal.Claims.FirstOrDefault(c => c.Type == "signInNames.emailAddress")?.Value
+                             ?? principal.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Email)?.Value;
+                        string givenName = principal.Claims.FirstOrDefault(c => c.Type == ClaimTypes.GivenName)?.Value;
+                        string surname = principal.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Surname)?.Value;
 
                         // Construct a unique username identifier for the local system
                         string userKey = email != null ? email.ToLowerInvariant() : Guid.NewGuid().ToString();
@@ -302,6 +344,11 @@ namespace com.thealliancecanada.RockSSOPlugin
                             userPrincipalName = email,
                             displayName = $"{givenName} {surname}"
                         };
+
+                        if (debugModeEnabled)
+                        {
+                            ExceptionLogService.LogException(new Exception($"B2C_User: ID={b2cUser.id}, GivenName={b2cUser.givenName}, Surname={b2cUser.surname}, UPN={b2cUser.userPrincipalName}, DisplayName={b2cUser.displayName}"));
+                        }
 
                         result.UserName = GetB2CUser(b2cUser, idToken);
                         result.IsAuthenticated = !string.IsNullOrWhiteSpace(result.UserName);
