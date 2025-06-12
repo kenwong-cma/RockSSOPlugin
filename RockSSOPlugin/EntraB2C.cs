@@ -31,17 +31,18 @@ namespace com.thealliancecanada.RockSSOPlugin
     [Export(typeof(AuthenticationComponent))]
     [ExportMetadata("ComponentName", "Entra B2C")]
 
-    [UrlLinkField("Authorization URI", "URI for authorization requests from Entra B2C.", true, "", "", 0)]
-    [UrlLinkField("Token URI", "URI for token requests from Entra B2C.", true, "", "", 1)]
-    [TextField("Client Id", "Client Id from your Entra B2C App Registration.", true, "", "", 3)]
-    [TextField("Client Secret", "Client Secret from your Entra B2C App Registration.", true, "", "", 4)]
-    [BooleanField("Enable Debug Mode", "Enable to log detailed debug information.", false, "", 5)]
-    [UrlLinkField("WellKnown",
+    [UrlLinkField("EntraB2C_AuthorizationURI", "URI for authorization requests from Entra B2C.", true, "", "", 0)]
+    [UrlLinkField("EntraB2C_TokenURI", "URI for token requests from Entra B2C.", true, "", "", 1)]
+    [TextField("EntraB2C_ClientId", "Client Id from your Entra B2C App Registration.", true, "", "", 3)]
+    [TextField("EntraB2C_ClientSecret", "Client Secret from your Entra B2C App Registration.", true, "", "", 4)]
+    [BooleanField("EntraB2C_EnableDebugMode", "Enable to log detailed debug information.", false, "", 5)]
+    [UrlLinkField("EntraB2C_WellKnown",
     "URI for fetching the OpenID Connect configuration from Entra B2C.",
     true,
     "https://theallianceca.b2clogin.com/theallianceca.onmicrosoft.com/B2C_1A_SIGNUP_SIGNIN/v2.0/.well-known/openid-configuration",
     "",
     6)]
+
     public class EntraB2C : AuthenticationComponent, IExternalRedirectAuthentication
     {
         private const string EXCEPTION_DEBUG_TEXT = "Entra B2C Debug";
@@ -59,8 +60,8 @@ namespace com.thealliancecanada.RockSSOPlugin
 
         public override Uri GenerateLoginUrl(HttpRequest request)
         {
-            string authorizationURI = GetAttributeValue("AuthorizationURI");
-            string clientId = GetAttributeValue("ClientId");
+            string authorizationURI = GetAttributeValue("EntraB2C_AuthorizationURI");
+            string clientId = GetAttributeValue("EntraB2C_ClientId");
             string returnUrl = request.QueryString["returnurl"];
             string redirectUri = GetRedirectUrl(request);
             // Adjust scopes as needed for Entra B2C
@@ -80,17 +81,17 @@ namespace com.thealliancecanada.RockSSOPlugin
             username = string.Empty;
             returnUrl = request.QueryString["state"];
             string redirectUri = GetRedirectUrl(request);
-            string tokenURI = GetAttributeValue("TokenURI");
-            string wellKnownUri = GetAttributeValue("WellKnown");
-            bool debugModeEnabled = GetAttributeValue("EnableDebugMode").AsBoolean();
+            string tokenURI = GetAttributeValue("EntraB2C_TokenURI");
+            string wellKnownUri = GetAttributeValue("EntraB2C_WellKnown");
+            bool debugModeEnabled = GetAttributeValue("EntraB2C_EnableDebugMode").AsBoolean();
 
             try
             {
                 var restClient = new RestClient(tokenURI);
                 var restRequest = new RestRequest(Method.POST);
                 restRequest.AddParameter("code", request.QueryString["code"]);
-                restRequest.AddParameter("client_id", GetAttributeValue("ClientId"));
-                restRequest.AddParameter("client_secret", GetAttributeValue("ClientSecret"));
+                restRequest.AddParameter("client_id", GetAttributeValue("EntraB2C_ClientId"));
+                restRequest.AddParameter("client_secret", GetAttributeValue("EntraB2C_ClientSecret"));
                 restRequest.AddParameter("redirect_uri", redirectUri);
                 restRequest.AddParameter("grant_type", "authorization_code");
                 restRequest.AddParameter("scope", "openid profile email");
@@ -133,7 +134,7 @@ namespace com.thealliancecanada.RockSSOPlugin
                             ValidateIssuer = true,
                             ValidIssuer = openIdConfig.Issuer,
                             ValidateAudience = true,
-                            ValidAudience = GetAttributeValue("ClientId"),
+                            ValidAudience = GetAttributeValue("EntraB2C_ClientId"),
                             ValidateLifetime = true,
                             IssuerSigningKeys = openIdConfig.SigningKeys,
                             // Optional: Validate the token's nonce, if used
@@ -226,16 +227,16 @@ namespace com.thealliancecanada.RockSSOPlugin
                 UserName = string.Empty,
                 ReturnUrl = options.Parameters.GetValueOrNull("State")
             };
-            string tokenURI = GetAttributeValue("TokenURI");
-            bool debugModeEnabled = GetAttributeValue("EnableDebugMode").AsBoolean();
+            string tokenURI = GetAttributeValue("EntraB2C_TokenURI");
+            bool debugModeEnabled = GetAttributeValue("EntraB2C_EnableDebugMode").AsBoolean();
 
             try
             {
                 var restClient = new RestClient(tokenURI);
                 var restRequest = new RestRequest(Method.POST);
                 restRequest.AddParameter("code", options.Parameters.GetValueOrNull("code"));
-                restRequest.AddParameter("client_id", GetAttributeValue("ClientId"));
-                restRequest.AddParameter("client_secret", GetAttributeValue("ClientSecret"));
+                restRequest.AddParameter("client_id", GetAttributeValue("EntraB2C_ClientId"));
+                restRequest.AddParameter("client_secret", GetAttributeValue("EntraB2C_ClientSecret"));
                 restRequest.AddParameter("redirect_uri", options.RedirectUrl);
                 restRequest.AddParameter("grant_type", "authorization_code");
                 restRequest.AddParameter("scope", "openid profile email");
@@ -258,7 +259,7 @@ namespace com.thealliancecanada.RockSSOPlugin
                         var handler = new JwtSecurityTokenHandler();
 
                         // Retrieve the OpenID Connect metadata document
-                        string wellKnownUri = GetAttributeValue("WellKnown");
+                        string wellKnownUri = GetAttributeValue("EntraB2C_WellKnown");
                         var configurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
                             wellKnownUri,
                             new OpenIdConnectConfigurationRetriever());
@@ -280,7 +281,7 @@ namespace com.thealliancecanada.RockSSOPlugin
                             ValidateIssuer = true,
                             ValidIssuer = openIdConfig.Issuer,
                             ValidateAudience = true,
-                            ValidAudience = GetAttributeValue("ClientId"),
+                            ValidAudience = GetAttributeValue("EntraB2C_ClientId"),
                             ValidateLifetime = true,
                             IssuerSigningKeys = openIdConfig.SigningKeys,
                             // Optional: Validate the token's nonce, if used
@@ -385,8 +386,8 @@ namespace com.thealliancecanada.RockSSOPlugin
 
         public Uri GenerateExternalLoginUrl(string externalProviderReturnUrl, string successfulAuthenticationRedirectUrl)
         {
-            string authorizationURI = GetAttributeValue("AuthorizationURI");
-            string clientId = GetAttributeValue("ClientId");
+            string authorizationURI = GetAttributeValue("EntraB2C_AuthorizationURI");
+            string clientId = GetAttributeValue("EntraB2C_ClientId");
             string returnUrl = HttpUtility.UrlEncode(externalProviderReturnUrl);
             string redirectUri = HttpUtility.UrlEncode(successfulAuthenticationRedirectUrl ?? FormsAuthentication.DefaultUrl);
             string newUrl = string.Format(
